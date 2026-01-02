@@ -1,0 +1,11 @@
+[
+  {
+    "name": "auth_token",
+    "value": "YOUR_TOKEN_HERE",
+    "domain": ".x.com",
+    "path": "/",
+    "expires": 1801305368.759,
+    "httpOnly": true,
+    "secure": true
+  }
+]
