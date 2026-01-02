@@ -1,0 +1,14 @@
+.env
+cookies.json
+key.pem
+cert.pem
+*.pem
+*.key
+twitter_session_backup.json
+rate_state.json
+bot_stats.db
+proxies.txt
+node_modules/
+*.log
+*.png
+.DS_Store
