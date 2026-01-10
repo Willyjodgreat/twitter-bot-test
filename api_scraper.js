@@ -493,8 +493,9 @@ class ApiScraper {
                 `--user-agent=${process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}`
             ];
             
+            // ==================== MODIFIED FOR HEADLESS ====================
             this.browser = await chromium.launch({ 
-                headless: process.env.HEADLESS !== 'false',
+                headless: true, // FORCED HEADLESS FOR SERVER
                 args: browserArgs
             });
             
@@ -1366,10 +1367,12 @@ async function startServer() {
             }
         }
         
-        server.listen(PORT, () => {
+        // ==================== MODIFIED FOR 0.0.0.0 BINDING ====================
+        server.listen(PORT, '0.0.0.0', () => {
             console.log(`
 ✅ SERVER STARTED
    Port: ${PORT}
+   Host: 0.0.0.0 (Accepting connections worldwide)
    Mode: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}
    SSL: ${sslEnabled ? '✅ ENABLED (HTTPS)' : '❌ DISABLED (HTTP)'}
    
@@ -1380,13 +1383,15 @@ async function startServer() {
    Rate Limit: ${RATE_LIMIT_MAX}/min
    
 🔗 ENDPOINTS
-   Web UI: ${sslEnabled ? 'https' : 'http'}://localhost:${PORT}/
-   API: ${sslEnabled ? 'https' : 'http'}://localhost:${PORT}/scrape
-   Health: ${sslEnabled ? 'https' : 'http'}://localhost:${PORT}/health
+   Web UI: ${sslEnabled ? 'https' : 'http'}://YOUR_SERVER_IP:${PORT}/
+   API: ${sslEnabled ? 'https' : 'http'}://YOUR_SERVER_IP:${PORT}/scrape
+   Health: ${sslEnabled ? 'https' : 'http'}://YOUR_SERVER_IP:${PORT}/health
+   Accessible from: ANYWHERE IN THE WORLD
    
 🛡️ SECURITY STATUS
    SSL: ${sslEnabled ? '✅ Secure' : '❌ UNSECURE - BAN RISK'}
    Browser SSL: ✅ Enabled (ignoreHTTPSErrors: false)
+   Headless Mode: ✅ Enabled (No GUI)
    
 💡 TIPS
    • For production: npm run ssl
