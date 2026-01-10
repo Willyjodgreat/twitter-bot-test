@@ -42,6 +42,15 @@ function validateSSLConfiguration() {
 
 const sslEnabled = validateSSLConfiguration();
 
+// ==================== API KEY CONFIGURATION ====================
+// Set your API key in .env file as: API_KEY=Willyjodgreat
+// Or run: export API_KEY=Willyjodgreat
+const API_KEY = process.env.API_KEY || 'Willyjodgreat'; // Default API key
+
+console.log(`🔑 API Key Status: ${API_KEY ? '✅ Configured' : '❌ NOT SET!'}`);
+console.log(`   API Key: ${API_KEY.substring(0, 3)}...${API_KEY.substring(API_KEY.length - 3)}`);
+console.log(`   To change: Edit .env file or run: export API_KEY=your_new_key`);
+
 // ==================== UTILITY CLASSES ====================
 class RequestQueue {
     constructor() {
@@ -1024,34 +1033,42 @@ app.use((req, res, next) => {
     next();
 });
 
-// API Key Authentication Middleware
+// ==================== API KEY AUTHENTICATION MIDDLEWARE ====================
+// This middleware protects your API endpoints
+// Use API key: Willyjodgreat (or whatever you set in .env)
 const apiKeyAuth = (req, res, next) => {
-    if (!process.env.API_KEY) {
-        console.warn('⚠️ WARNING: No API_KEY configured');
+    // If no API key is configured, allow all requests (for testing only)
+    if (!API_KEY || API_KEY === '') {
+        console.warn('⚠️ WARNING: No API_KEY configured. Allowing all requests.');
         return next();
     }
     
+    // Get API key from headers or query parameter
     const apiKey = req.headers['x-api-key'] || req.query.api_key;
     
     if (!apiKey) {
         return res.status(401).json({
             success: false,
             error: 'API key required',
-            message: 'Include x-api-key header or api_key query parameter'
+            message: 'Include x-api-key header or api_key query parameter',
+            example_curl: `curl -H "x-api-key: ${API_KEY}" http://localhost:3003/scrape -X POST -H "Content-Type: application/json" -d '{"keyword":"technology"}'`
         });
     }
     
-    if (apiKey !== process.env.API_KEY) {
+    if (apiKey !== API_KEY) {
         return res.status(403).json({
             success: false,
-            error: 'Invalid API key'
+            error: 'Invalid API key',
+            hint: `Expected: ${API_KEY.substring(0, 3)}...${API_KEY.substring(API_KEY.length - 3)}`,
+            received: apiKey.substring(0, 3) + '...' + apiKey.substring(apiKey.length - 3)
         });
     }
     
+    console.log(`🔐 API Request authenticated from ${req.ip}`);
     next();
 };
 
-// Routes
+// Routes that require API key
 app.post('/scrape', apiKeyAuth, async (req, res) => {
     const startTime = Date.now();
     
@@ -1126,6 +1143,7 @@ app.post('/scrape', apiKeyAuth, async (req, res) => {
     }
 });
 
+// Routes that don't require API key (public)
 app.get('/health', (req, res) => {
     const stats = scraper.getStats();
     const memory = process.memoryUsage();
@@ -1134,6 +1152,7 @@ app.get('/health', (req, res) => {
         status: scraper.isConnected ? 'healthy' : 'disconnected',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
+        api_key_configured: !!API_KEY,
         ssl: {
             enabled: sslEnabled,
             mode: sslEnabled ? 'HTTPS' : 'HTTP',
@@ -1169,11 +1188,16 @@ app.get('/stats', (req, res) => {
             enabled: sslEnabled,
             key_path: process.env.SSL_KEY_PATH || 'Not set',
             cert_path: process.env.SSL_CERT_PATH || 'Not set'
+        },
+        api_key_info: {
+            configured: !!API_KEY,
+            length: API_KEY ? API_KEY.length : 0,
+            secure: API_KEY && API_KEY.length >= 8 ? '✅' : '⚠️'
         }
     });
 });
 
-app.post('/cache/clear', (req, res) => {
+app.post('/cache/clear', apiKeyAuth, (req, res) => {
     scraper.tweetCache.clear();
     res.json({
         success: true,
@@ -1182,9 +1206,100 @@ app.post('/cache/clear', (req, res) => {
     });
 });
 
+// ==================== HOW TO USE THE API ====================
+app.get('/api-docs', (req, res) => {
+    res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Twitter Scraper API Documentation</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background: #f5f8fa; }
+        .container { max-width: 1000px; margin: 0 auto; }
+        .header { background: white; padding: 20px; border-radius: 10px; margin-bottom: 20px; }
+        .endpoint { background: white; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .method { display: inline-block; padding: 5px 10px; border-radius: 3px; color: white; }
+        .post { background: #49cc90; }
+        .get { background: #61affe; }
+        code { background: #f6f8fa; padding: 2px 5px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🐦 Twitter Scraper API v4.1</h1>
+            <p>API Key: <code>${API_KEY || 'Not configured'}</code></p>
+            <p>Base URL: ${sslEnabled ? 'https' : 'http'}://${req.headers.host}</p>
+        </div>
+        
+        <div class="endpoint">
+            <span class="method post">POST</span> <strong>/scrape</strong>
+            <p>Scrape tweets for a keyword (requires API key)</p>
+            <h4>cURL Example:</h4>
+            <code>
+curl -X POST ${sslEnabled ? 'https' : 'http'}://${req.headers.host}/scrape \\<br>
+  -H "Content-Type: application/json" \\<br>
+  -H "x-api-key: ${API_KEY || 'YOUR_API_KEY'}" \\<br>
+  -d '{"keyword": "technology", "limit": 10}'
+            </code>
+            
+            <h4>Python Example:</h4>
+            <code>
+import requests<br>
+<br>
+response = requests.post(<br>
+    '${sslEnabled ? 'https' : 'http'}://${req.headers.host}/scrape',<br>
+    json={'keyword': 'technology', 'limit': 10},<br>
+    headers={'x-api-key': '${API_KEY || 'YOUR_API_KEY'}'}<br>
+)<br>
+print(response.json())
+            </code>
+        </div>
+        
+        <div class="endpoint">
+            <span class="method get">GET</span> <strong>/health</strong>
+            <p>Check server health (no API key required)</p>
+            <code>curl ${sslEnabled ? 'https' : 'http'}://${req.headers.host}/health</code>
+        </div>
+        
+        <div class="endpoint">
+            <span class="method get">GET</span> <strong>/stats</strong>
+            <p>Get bot statistics (no API key required)</p>
+            <code>curl ${sslEnabled ? 'https' : 'http'}://${req.headers.host}/stats</code>
+        </div>
+        
+        <div class="endpoint">
+            <span class="method post">POST</span> <strong>/cache/clear</strong>
+            <p>Clear tweet cache (requires API key)</p>
+            <code>
+curl -X POST ${sslEnabled ? 'https' : 'http'}://${req.headers.host}/cache/clear \\<br>
+  -H "x-api-key: ${API_KEY || 'YOUR_API_KEY'}"
+            </code>
+        </div>
+        
+        <h3>📝 Request Body Format for /scrape:</h3>
+        <code>
+{<br>
+  "keyword": "technology",  // Required: Search keyword<br>
+  "limit": 20,             // Optional: Number of tweets (default: 20, max: 100)<br>
+  "priority": 0            // Optional: Priority (0=normal, 1=high)<br>
+}
+        </code>
+        
+        <h3>🔐 Changing Your API Key:</h3>
+        <p>Edit your <code>.env</code> file:</p>
+        <code>API_KEY=your_new_secret_key_here</code>
+        <p>Or set it temporarily:</p>
+        <code>export API_KEY=your_new_key && node api_scraper.js</code>
+    </div>
+</body>
+</html>`);
+});
+
 app.get('/', (req, res) => {
     const stats = scraper.getStats();
     const sslStatus = sslEnabled ? '✅ HTTPS Enabled' : '⚠️ HTTP (No SSL)';
+    const apiKeyStatus = API_KEY ? '✅ Configured' : '❌ Not configured';
     const securityAlert = !sslEnabled && isProduction ? 
         '<div style="background:#f8d7da;color:#721c24;padding:10px;border-radius:5px;margin:10px 0;">🚨 SECURITY WARNING: Running production without SSL - HIGH BAN RISK!</div>' : '';
     
@@ -1202,6 +1317,8 @@ app.get('/', (req, res) => {
         .disconnected { background: #f8d7da; color: #721c24; }
         .ssl-enabled { background: #d1ecf1; color: #0c5460; }
         .ssl-disabled { background: #fff3cd; color: #856404; }
+        .api-configured { background: #d4edda; color: #155724; }
+        .api-not-configured { background: #f8d7da; color: #721c24; }
         .dashboard { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin: 20px 0; }
         .card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .metric { font-size: 2em; font-weight: bold; margin: 10px 0; }
@@ -1210,13 +1327,14 @@ app.get('/', (req, res) => {
         button { background: #1da1f2; color: white; border: none; cursor: pointer; }
         button:hover { background: #0d8bdc; }
         .tweet { border-left: 3px solid #1da1f2; padding: 10px; margin: 10px 0; background: #f8f9fa; }
+        .api-key-display { font-family: monospace; background: #f8f9fa; padding: 10px; border-radius: 5px; margin: 10px 0; }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>🐦 Twitter Scraper v4.1</h1>
-            <p>SSL Secure Edition • Anti-Ban Protection</p>
+            <p>SSL Secure Edition • API Protected • Anti-Ban Protection</p>
             ${securityAlert}
             <div style="margin: 10px 0;">
                 <span class="status ${stats.status === 'connected' ? 'connected' : 'disconnected'}">
@@ -1225,7 +1343,15 @@ app.get('/', (req, res) => {
                 <span class="status ${sslEnabled ? 'ssl-enabled' : 'ssl-disabled'}" style="margin-left: 10px;">
                     ${sslStatus}
                 </span>
+                <span class="status ${API_KEY ? 'api-configured' : 'api-not-configured'}" style="margin-left: 10px;">
+                    API KEY: ${apiKeyStatus}
+                </span>
             </div>
+            <div class="api-key-display">
+                <strong>Your API Key:</strong> ${API_KEY ? API_KEY.substring(0, 3) + '...' + API_KEY.substring(API_KEY.length - 3) : 'NOT SET'}
+                <br><small>Use in headers: <code>x-api-key: ${API_KEY || 'your_api_key'}</code></small>
+            </div>
+            <p><a href="/api-docs">📚 View API Documentation</a></p>
         </div>
         
         <div class="dashboard">
@@ -1260,7 +1386,7 @@ app.get('/', (req, res) => {
         </div>
         
         <div class="controls">
-            <h3>🔍 Test Scraper</h3>
+            <h3>🔍 Test Scraper (Requires API Key)</h3>
             <input type="text" id="keyword" value="${scraper.keywords[0] || 'technology'}" placeholder="Enter keyword">
             <select id="limit">
                 <option value="5">5 tweets</option>
@@ -1272,10 +1398,12 @@ app.get('/', (req, res) => {
         </div>
         
         <div class="card">
-            <h3>SSL Status</h3>
-            <p><strong>Mode:</strong> ${sslEnabled ? 'HTTPS (Secure)' : 'HTTP (Insecure)'}</p>
+            <h3>🔐 API Security Status</h3>
+            <p><strong>API Key:</strong> ${API_KEY ? '✅ Configured' : '❌ Not configured'}</p>
+            <p><strong>SSL Mode:</strong> ${sslEnabled ? '✅ HTTPS (Secure)' : '⚠️ HTTP (Insecure)'}</p>
             <p><strong>Certificates:</strong> ${sslEnabled ? '✅ Configured' : '❌ Not configured'}</p>
             ${!sslEnabled ? '<p><em>⚠️ For production, generate SSL certificates with: npm run ssl</em></p>' : ''}
+            ${!API_KEY ? '<p><em>⚠️ Set API key in .env file as: API_KEY=your_secret_key</em></p>' : ''}
         </div>
     </div>
     
@@ -1290,7 +1418,10 @@ app.get('/', (req, res) => {
             try {
                 const response = await fetch('/scrape', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'x-api-key': '${API_KEY || 'YOUR_API_KEY'}'
+                    },
                     body: JSON.stringify({ keyword, limit: parseInt(limit) })
                 });
                 
@@ -1335,7 +1466,16 @@ async function startServer() {
         console.log(`
 ╔══════════════════════════════════════════════════════════╗
 ║      TWITTER SCRAPER v4.1 - SSL SECURE EDITION          ║
+║                API KEY PROTECTED                         ║
 ╚══════════════════════════════════════════════════════════╝`);
+        
+        console.log(`🔑 API Key: ${API_KEY ? '✅ Configured' : '❌ NOT SET!'}`);
+        if (API_KEY) {
+            console.log(`   Key: ${API_KEY.substring(0, 3)}...${API_KEY.substring(API_KEY.length - 3)}`);
+        } else {
+            console.log('   ⚠️ WARNING: No API key configured. Anyone can access your bot!');
+            console.log('   Set API key in .env file: API_KEY=your_secret_key');
+        }
         
         // Connect to Twitter
         console.log('🚀 Connecting to Twitter...');
@@ -1375,6 +1515,7 @@ async function startServer() {
    Host: 0.0.0.0 (Accepting connections worldwide)
    Mode: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}
    SSL: ${sslEnabled ? '✅ ENABLED (HTTPS)' : '❌ DISABLED (HTTP)'}
+   API Protection: ${API_KEY ? '✅ ENABLED' : '❌ DISABLED'}
    
 📊 CONFIGURATION
    Keywords: ${scraper.keywords.join(', ')}
@@ -1384,17 +1525,24 @@ async function startServer() {
    
 🔗 ENDPOINTS
    Web UI: ${sslEnabled ? 'https' : 'http'}://YOUR_SERVER_IP:${PORT}/
+   API Docs: ${sslEnabled ? 'https' : 'http'}://YOUR_SERVER_IP:${PORT}/api-docs
    API: ${sslEnabled ? 'https' : 'http'}://YOUR_SERVER_IP:${PORT}/scrape
    Health: ${sslEnabled ? 'https' : 'http'}://YOUR_SERVER_IP:${PORT}/health
    Accessible from: ANYWHERE IN THE WORLD
    
+🔐 API USAGE
+   Header: x-api-key: ${API_KEY || 'YOUR_API_KEY'}
+   Example: curl -H "x-api-key: ${API_KEY || 'your_key'}" ${sslEnabled ? 'https' : 'http'}://172.105.148.50:${PORT}/scrape -X POST -H "Content-Type: application/json" -d '{"keyword":"technology"}'
+   
 🛡️ SECURITY STATUS
    SSL: ${sslEnabled ? '✅ Secure' : '❌ UNSECURE - BAN RISK'}
+   API Key: ${API_KEY ? '✅ Enabled' : '❌ Disabled - INSECURE!'}
    Browser SSL: ✅ Enabled (ignoreHTTPSErrors: false)
    Headless Mode: ✅ Enabled (No GUI)
    
 💡 TIPS
    • For production: npm run ssl
+   • Change API key: Edit .env file
    • Monitor /health for system status
    • Check logs/ directory for detailed logs
             `);
@@ -1417,6 +1565,7 @@ async function startServer() {
     }
 }
 
+// ==================== FIXED: NO AUTO-RESTART LOOP ====================
 // Graceful shutdown
 async function gracefulShutdown(signal) {
     console.log(`\n🛑 Received ${signal}, shutting down gracefully...`);
@@ -1434,22 +1583,30 @@ async function gracefulShutdown(signal) {
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-process.on('uncaughtException', async (error) => {
-    console.error('⚠️ Uncaught Exception:', error);
+// ==================== CRITICAL FIX: NO INFINITE RESTART ====================
+process.on('uncaughtException', (error) => {
+    console.error('❌ UNCAUGHT EXCEPTION:', error.message);
+    console.error('Stack:', error.stack.substring(0, 500));
     
-    const errorLog = `[${new Date().toISOString()}] UNCAUGHT EXCEPTION: ${error.message}\n${error.stack}\n\n`;
-    fs.appendFileSync('logs/errors.log', errorLog);
+    // Log error but DO NOT RESTART
+    const errorLog = `[${new Date().toISOString()}] CRASH - NO AUTO RESTART\n` +
+                    `Error: ${error.message}\n` +
+                    `Stack: ${error.stack}\n\n`;
     
-    console.log('Attempting recovery...');
-    try {
-        await scraper.disconnect();
-        await new Promise(resolve => setTimeout(resolve, 10000));
-        await startServer();
-        console.log('✅ Recovery successful');
-    } catch (recoveryError) {
-        console.error('❌ Recovery failed:', recoveryError);
-        process.exit(1);
+    fs.appendFileSync('logs/crashes.log', errorLog);
+    
+    // Check if it's EADDRINUSE (port already in use)
+    if (error.code === 'EADDRINUSE') {
+        console.error(`💀 FATAL: Port ${PORT} already in use!`);
+        console.error('   Another instance might be running.');
+        console.error('   Check: sudo lsof -i :' + PORT);
+        console.error('   Kill: pkill -f "node.*${PORT}"');
     }
+    
+    // Exit immediately - NO RESTART LOOP
+    console.log('💀 Bot crashed. Manual restart required.');
+    console.log('   Run: node api_scraper.js');
+    process.exit(1);
 });
 
 // Start the server
