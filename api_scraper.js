@@ -1,26 +1,21 @@
-// api_scraper_vps.js - VPS Optimized Twitter Scraper v5.0
+// twitter_vps_scraper.js
+// Professional X/Twitter Scraper - VPS Optimized Edition v6.0
 const { chromium } = require('playwright');
 const express = require('express');
 const fs = require('fs');
-const https = require('https');
-const http = require('http');
 const path = require('path');
 const os = require('os');
 require('dotenv').config();
 
-// ==================== VPS OPTIMIZED CONFIG ====================
-const isProduction = process.env.NODE_ENV === 'production';
+// ==================== VPS OPTIMIZATION ====================
+const HOST = '0.0.0.0';  // Listen on all interfaces
 const PORT = process.env.PORT || 3003;
-const HOST = '0.0.0.0'; // CRITICAL: Listen on all interfaces
+const VPS_MODE = true;   // Always optimized for VPS
 
-// SSL Configuration
-const sslEnabled = process.env.SSL_ENABLED === 'true';
-const sslKeyPath = process.env.SSL_KEY_PATH;
-const sslCertPath = process.env.SSL_CERT_PATH;
-
-// ==================== VPS OPTIMIZED BROWSER SETTINGS ====================
-const getBrowserArgs = () => {
-    const args = [
+// ==================== ANTI-DETECTION CONFIGURATION ====================
+const BROWSER_CONFIG = {
+    headless: 'new',  // New headless mode for better compatibility[citation:1]
+    args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
@@ -29,62 +24,96 @@ const getBrowserArgs = () => {
         '--window-size=1280,720',
         '--disable-blink-features=AutomationControlled',
         '--disable-features=IsolateOrigins,site-per-process',
-        `--user-agent=${process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}`,
-        '--disable-software-rasterizer',
+        '--disable-site-isolation-trials',
         '--disable-web-security=false',
-        '--no-zygote',
-        '--single-process',
         '--no-first-run',
-        '--no-default-browser-check'
-    ];
-    
-    // Memory optimization for VPS
-    const totalMemory = os.totalmem();
-    if (totalMemory < 2 * 1024 * 1024 * 1024) { // Less than 2GB
-        args.push('--memory-pressure-off');
-        args.push('--disable-background-timer-throttling');
-    }
-    
-    return args;
+        '--no-default-browser-check',
+        '--disable-notifications',
+        '--disable-popup-blocking',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-breakpad',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-extensions',
+        '--disable-features=TranslateUI',
+        '--disable-hang-monitor',
+        '--disable-ipc-flooding-protection',
+        '--disable-renderer-backgrounding',
+        `--user-agent=${process.env.USER_AGENT || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}`
+    ]
 };
 
 // ==================== VPS SCRAPER CLASS ====================
-class VpsScraper {
+class VpsTwitterScraper {
     constructor() {
         this.browser = null;
         this.context = null;
-        this.page = null;
         this.isConnected = false;
         this.sessionFile = 'twitter_session.json';
         
-        // VPS optimized settings
-        this.maxRetries = 3;
-        this.timeout = parseInt(process.env.BROWSER_TIMEOUT) || 60000;
-        this.headless = process.env.HEADLESS !== 'false';
+        // VPS Optimized Settings
+        this.maxConcurrentPages = 3;  // Limit for memory management
+        this.activePages = new Set();
+        this.pageCleanupInterval = null;
+        this.scrapeHistory = [];
+        this.errorCount = 0;
+        this.successCount = 0;
         
-        console.log(`🖥️  VPS Configuration:`);
-        console.log(`   Host: ${HOST}:${PORT}`);
-        console.log(`   Headless: ${this.headless}`);
-        console.log(`   Memory: ${Math.round(os.totalmem() / 1024 / 1024 / 1024)}GB`);
-        console.log(`   Cores: ${os.cpus().length}`);
+        // Rate limiting
+        this.baseDelay = parseInt(process.env.MIN_DELAY_MS) || 30000;
+        this.maxDelay = parseInt(process.env.MAX_DELAY_MS) || 120000;
+        this.lastRequestTime = 0;
+        
+        // Memory tracking
+        this.maxHistorySize = 100;
+        
+        // Setup
+        this.validateEnvironment();
+        this.setupLogging();
+    }
+    
+    validateEnvironment() {
+        if (!fs.existsSync(this.sessionFile)) {
+            console.warn('⚠️ No session file found. Some features may require login.');
+            console.log('  To create session: node get_session.js');
+        }
+    }
+    
+    setupLogging() {
+        const logDir = 'logs';
+        if (!fs.existsSync(logDir)) {
+            fs.mkdirSync(logDir, { recursive: true });
+        }
+        
+        const logFile = path.join(logDir, `scraper_${new Date().toISOString().split('T')[0]}.log`);
+        this.logStream = fs.createWriteStream(logFile, { flags: 'a' });
+        
+        console.log = (...args) => {
+            const message = args.map(arg => 
+                typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+            ).join(' ');
+            
+            const timestamp = new Date().toISOString();
+            this.logStream.write(`[${timestamp}] INFO: ${message}\n`);
+            process.stdout.write(`[${timestamp}] ${args.join(' ')}\n`);
+        };
+        
+        console.error = (...args) => {
+            const message = args.map(arg => 
+                typeof arg === 'object' ? JSON.stringify(arg, null, 2) : String(arg)
+            ).join(' ');
+            
+            const timestamp = new Date().toISOString();
+            this.logStream.write(`[${timestamp}] ERROR: ${message}\n`);
+            process.stderr.write(`[${timestamp}] ${args.join(' ')}\n`);
+        };
     }
     
     async connect() {
         try {
             console.log('🚀 Initializing VPS-optimized browser...');
             
-            // Load session if exists
-            if (!fs.existsSync(this.sessionFile)) {
-                throw new Error(`Session file ${this.sessionFile} not found.`);
-            }
-            
-            const browserArgs = getBrowserArgs();
-            
-            this.browser = await chromium.launch({ 
-                headless: this.headless,
-                args: browserArgs,
-                timeout: this.timeout
-            });
+            this.browser = await chromium.launch(BROWSER_CONFIG);
             
             this.context = await this.browser.newContext({
                 viewport: { width: 1280, height: 720 },
@@ -94,406 +123,563 @@ class VpsScraper {
                 locale: 'en-US'
             });
             
-            // Load cookies
-            const session = JSON.parse(fs.readFileSync(this.sessionFile, 'utf8'));
-            await this.context.addCookies(session.cookies);
-            console.log(`✅ Loaded ${session.cookies.length} cookies`);
-            
-            this.page = await this.context.newPage();
-            this.page.setDefaultTimeout(this.timeout);
-            
-            // Verify login
-            console.log('🔐 Verifying login status...');
-            await this.verifyLogin();
+            // Load session if exists
+            if (fs.existsSync(this.sessionFile)) {
+                try {
+                    const session = JSON.parse(fs.readFileSync(this.sessionFile, 'utf8'));
+                    await this.context.addCookies(session.cookies);
+                    console.log(`✅ Loaded ${session.cookies.length} cookies`);
+                } catch (error) {
+                    console.warn('⚠️ Could not load session:', error.message);
+                }
+            }
             
             this.isConnected = true;
             console.log('🎉 VPS Scraper connected successfully');
             
+            // Start periodic cleanup
+            this.startCleanupInterval();
+            
+            return true;
+            
         } catch (error) {
             console.error('❌ Connection failed:', error.message);
-            await this.cleanup();
+            await this.cleanupResources();
             throw error;
         }
     }
     
-    async verifyLogin() {
-        for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-            try {
-                await this.page.goto('https://twitter.com/home', {
-                    waitUntil: 'domcontentloaded',
-                    timeout: 15000
-                });
-                
-                await this.page.waitForTimeout(2000);
-                
-                const isLoggedIn = await this.page.evaluate(() => {
-                    const loggedIn = document.querySelector('[data-testid="AppTabBar_Home_Link"]') !== null;
-                    const loginPage = document.querySelector('input[name="session[username_or_email]"]') !== null;
-                    return loggedIn && !loginPage;
-                });
-                
-                if (isLoggedIn) {
-                    console.log('✅ Login verified');
-                    return true;
-                }
-                
-                console.log(`⚠️  Login check attempt ${attempt} failed`);
-                
-            } catch (error) {
-                console.log(`   Attempt ${attempt} error: ${error.message}`);
-            }
-            
-            if (attempt < this.maxRetries) {
-                await this.page.waitForTimeout(3000);
-            }
+    async enforceRateLimit() {
+        const now = Date.now();
+        const timeSinceLast = now - this.lastRequestTime;
+        
+        if (this.lastRequestTime > 0 && timeSinceLast < this.baseDelay) {
+            const waitTime = this.baseDelay - timeSinceLast;
+            console.log(`🚦 Rate limit: Waiting ${Math.round(waitTime/1000)}s`);
+            await new Promise(resolve => setTimeout(resolve, waitTime));
         }
         
-        throw new Error('Could not verify Twitter login');
+        this.lastRequestTime = Date.now();
     }
     
-    async scrape(keyword, limit = 5) {
-        if (!this.isConnected) {
-            throw new Error('Scraper not connected');
+    async createScrapePage() {
+        if (this.activePages.size >= this.maxConcurrentPages) {
+            throw new Error('Too many active pages. Wait for cleanup.');
         }
         
+        const page = await this.context.newPage();
+        this.activePages.add(page);
+        
+        // Configure page for VPS
+        page.setDefaultNavigationTimeout(30000);
+        page.setDefaultTimeout(30000);
+        
+        // Set random viewport to avoid detection
+        await page.setViewportSize({
+            width: 1100 + Math.floor(Math.random() * 200),
+            height: 600 + Math.floor(Math.random() * 200)
+        });
+        
+        return page;
+    }
+    
+    async closePage(page) {
+        try {
+            await page.close();
+            this.activePages.delete(page);
+        } catch (error) {
+            console.warn('Page close warning:', error.message);
+        }
+    }
+    
+    // ==================== MODERN X/TWITTER SELECTORS ====================
+    // Using data-testid attributes which are more stable than class names[citation:1][citation:6]
+    
+    async scrapeProfile(username) {
         const startTime = Date.now();
-        console.log(`🔍 Scraping "${keyword}"...`);
+        let page = null;
         
         try {
-            // Create new page for this scrape
-            const page = await this.context.newPage();
+            await this.enforceRateLimit();
             
-            const searchUrl = `https://twitter.com/search?q=${encodeURIComponent(keyword)}&src=typed_query&f=live`;
-            await page.goto(searchUrl, {
+            console.log(`🔍 Scraping profile: @${username}`);
+            page = await this.createScrapePage();
+            
+            const profileUrl = `https://x.com/${username}`;
+            await page.goto(profileUrl, {
                 waitUntil: 'networkidle',
-                timeout: 30000
+                timeout: 15000
             });
             
-            await page.waitForTimeout(5000);
+            // Wait for key profile elements[citation:1]
+            await page.waitForSelector('[data-testid="UserName"]', { timeout: 10000 });
+            
+            const profileData = await page.evaluate(() => {
+                // Modern X.com selectors using data-testid[citation:1]
+                const selectors = {
+                    name: '[data-testid="UserName"] div span',
+                    username: '[data-testid="UserName"] div:nth-of-type(2) span',
+                    bio: '[data-testid="UserDescription"]',
+                    followers: 'a[href$="/followers"] span',
+                    following: 'a[href$="/following"] span',
+                    joinDate: '[data-testid="UserJoinDate"] span',
+                    website: 'a[data-testid="UserUrl"]',
+                    location: '[data-testid="UserLocation"]'
+                };
+                
+                const getText = (selector) => {
+                    const element = document.querySelector(selector);
+                    return element ? element.textContent.trim() : null;
+                };
+                
+                return {
+                    name: getText(selectors.name),
+                    username: getText(selectors.username),
+                    bio: getText(selectors.bio),
+                    followers: getText(selectors.followers),
+                    following: getText(selectors.following),
+                    joinDate: getText(selectors.joinDate),
+                    website: getText(selectors.website),
+                    location: getText(selectors.location),
+                    scrapedAt: new Date().toISOString(),
+                    url: window.location.href
+                };
+            });
+            
+            await this.closePage(page);
+            
+            const elapsed = Date.now() - startTime;
+            console.log(`✅ Profile scraped in ${elapsed}ms`);
+            this.successCount++;
+            
+            this.scrapeHistory.push({
+                type: 'profile',
+                username,
+                timestamp: Date.now(),
+                duration: elapsed,
+                success: true
+            });
+            
+            return profileData;
+            
+        } catch (error) {
+            console.error(`❌ Profile scrape failed for @${username}:`, error.message);
+            
+            if (page) await this.closePage(page);
+            
+            this.errorCount++;
+            this.scrapeHistory.push({
+                type: 'profile',
+                username,
+                error: error.message,
+                timestamp: Date.now(),
+                success: false
+            });
+            
+            throw error;
+        }
+    }
+    
+    async scrapeTweets(keyword, limit = 10) {
+        const startTime = Date.now();
+        let page = null;
+        
+        try {
+            await this.enforceRateLimit();
+            
+            console.log(`🔍 Searching for: "${keyword}"`);
+            page = await this.createScrapePage();
+            
+            const searchUrl = `https://x.com/search?q=${encodeURIComponent(keyword)}&src=typed_query&f=live`;
+            await page.goto(searchUrl, {
+                waitUntil: 'networkidle',
+                timeout: 15000
+            });
+            
+            // Wait for tweet articles[citation:1]
+            await page.waitForSelector('article[data-testid="tweet"]', { timeout: 10000 });
             
             // Scroll to load more tweets
             await this.scrollPage(page, 2);
             
-            // Extract tweets
-            const tweets = await this.extractTweets(page, keyword);
+            const tweets = await page.evaluate((maxLimit) => {
+                const tweetElements = document.querySelectorAll('article[data-testid="tweet"]');
+                const tweets = [];
+                
+                tweetElements.forEach((article, index) => {
+                    if (index >= maxLimit) return;
+                    
+                    try {
+                        // Extract using stable selectors[citation:1][citation:6]
+                        const textElem = article.querySelector('[data-testid="tweetText"]');
+                        const authorElem = article.querySelector('[data-testid="User-Name"]');
+                        const timeElem = article.querySelector('time');
+                        const metrics = {
+                            replies: article.querySelector('[data-testid="reply"]')?.textContent || '0',
+                            retweets: article.querySelector('[data-testid="retweet"]')?.textContent || '0',
+                            likes: article.querySelector('[data-testid="like"]')?.textContent || '0'
+                        };
+                        
+                        // Extract tweet ID from links
+                        let tweetId = null;
+                        const tweetLink = article.querySelector('a[href*="/status/"]');
+                        if (tweetLink) {
+                            const match = tweetLink.getAttribute('href').match(/\/status\/(\d+)/);
+                            tweetId = match ? match[1] : null;
+                        }
+                        
+                        if (textElem && authorElem) {
+                            tweets.push({
+                                id: tweetId || `tweet_${Date.now()}_${index}`,
+                                text: textElem.textContent.substring(0, 280),
+                                author: authorElem.textContent.split('·')[0].trim(),
+                                timestamp: timeElem ? timeElem.getAttribute('datetime') : new Date().toISOString(),
+                                metrics,
+                                url: tweetId ? `https://x.com/i/status/${tweetId}` : null,
+                                scrapedAt: new Date().toISOString()
+                            });
+                        }
+                    } catch (e) {
+                        // Skip malformed tweets
+                    }
+                });
+                
+                return tweets;
+            }, limit);
             
-            await page.close();
+            await this.closePage(page);
             
-            const filteredTweets = this.filterTweets(tweets).slice(0, limit);
             const elapsed = Date.now() - startTime;
+            console.log(`✅ Found ${tweets.length} tweets in ${elapsed}ms`);
+            this.successCount++;
             
-            console.log(`✅ Found ${filteredTweets.length} tweets in ${elapsed}ms`);
-            return filteredTweets;
+            this.scrapeHistory.push({
+                type: 'search',
+                keyword,
+                count: tweets.length,
+                timestamp: Date.now(),
+                duration: elapsed,
+                success: true
+            });
+            
+            return tweets;
             
         } catch (error) {
-            console.error(`❌ Scrape failed for "${keyword}":`, error.message);
+            console.error(`❌ Search failed for "${keyword}":`, error.message);
+            
+            if (page) await this.closePage(page);
+            
+            this.errorCount++;
+            this.scrapeHistory.push({
+                type: 'search',
+                keyword,
+                error: error.message,
+                timestamp: Date.now(),
+                success: false
+            });
+            
             throw error;
         }
     }
     
-    async scrollPage(page, count = 2) {
+    async scrollPage(page, count) {
         for (let i = 0; i < count; i++) {
             await page.evaluate(() => {
                 window.scrollBy(0, window.innerHeight * 1.5);
             });
-            await page.waitForTimeout(2000);
+            await page.waitForTimeout(2000 + Math.random() * 1000); // Random delay
         }
     }
     
-    async extractTweets(page, keyword) {
-        return await page.evaluate((kw) => {
-            const tweets = [];
-            const articles = document.querySelectorAll('article');
-            
-            articles.forEach((article, index) => {
-                try {
-                    const textElement = article.querySelector('[data-testid="tweetText"]');
-                    const text = textElement ? textElement.textContent.trim() : '';
-                    
-                    if (text.length < 10) return;
-                    
-                    // Get author
-                    const authorElement = article.querySelector('[data-testid="User-Name"]');
-                    const author = authorElement ? authorElement.textContent.split('·')[0].trim() : '';
-                    
-                    // Get time
-                    const timeElement = article.querySelector('time');
-                    const timestamp = timeElement ? timeElement.getAttribute('datetime') : new Date().toISOString();
-                    
-                    // Get engagement
-                    const getMetric = (testId) => {
-                        const el = article.querySelector(`[data-testid="${testId}"]`);
-                        if (!el) return 0;
-                        const text = el.textContent || '';
-                        const match = text.match(/(\d+)/);
-                        return match ? parseInt(match[1]) : 0;
-                    };
-                    
-                    tweets.push({
-                        id: `tweet_${Date.now()}_${index}`,
-                        text: text.substring(0, 280),
-                        author: author.substring(0, 50),
-                        keyword: kw,
-                        timestamp: timestamp,
-                        isRecent: new Date(timestamp) > new Date(Date.now() - 24 * 60 * 60 * 1000),
-                        url: `https://twitter.com/i/web/status/${Date.now()}`,
-                        metrics: {
-                            likes: getMetric('like'),
-                            retweets: getMetric('retweet'),
-                            replies: getMetric('reply')
-                        },
-                        scrapedAt: new Date().toISOString()
-                    });
-                } catch (e) {
-                    // Skip malformed tweets
-                }
-            });
-            
-            return tweets;
-        }, keyword);
+    // ==================== RESOURCE MANAGEMENT ====================
+    
+    startCleanupInterval() {
+        this.pageCleanupInterval = setInterval(() => {
+            this.cleanupOldResources();
+        }, 60000); // Cleanup every minute
     }
     
-    filterTweets(tweets) {
-        // Remove duplicates based on text
-        const seen = new Set();
-        return tweets.filter(tweet => {
-            const key = tweet.text.substring(0, 100).toLowerCase();
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        }).sort((a, b) => {
-            // Sort by recent first
-            return new Date(b.timestamp) - new Date(a.timestamp);
-        });
-    }
-    
-    async cleanup() {
-        try {
-            if (this.page) await this.page.close();
-            if (this.context) await this.context.close();
-            if (this.browser) await this.browser.close();
-            this.isConnected = false;
-            console.log('🧹 Cleanup completed');
-        } catch (error) {
-            console.error('Cleanup error:', error.message);
+    cleanupOldResources() {
+        // Clean up old history
+        if (this.scrapeHistory.length > this.maxHistorySize) {
+            this.scrapeHistory = this.scrapeHistory.slice(-this.maxHistorySize);
         }
+        
+        // Check memory usage
+        const memory = process.memoryUsage();
+        if (memory.heapUsed > 300 * 1024 * 1024) { // 300MB threshold
+            console.warn(`⚠️ High memory usage: ${Math.round(memory.heapUsed / 1024 / 1024)}MB`);
+            // Force garbage collection if available
+            if (global.gc) {
+                global.gc();
+                console.log('🧹 Forced garbage collection');
+            }
+        }
+        
+        // Log cleanup stats
+        console.log(`📊 Cleanup: ${this.activePages.size} active pages, ${this.scrapeHistory.length} history entries`);
+    }
+    
+    async cleanupResources() {
+        console.log('🧹 Cleaning up resources...');
+        
+        // Close all active pages
+        const closePromises = Array.from(this.activePages).map(page => 
+            page.close().catch(() => {})
+        );
+        await Promise.all(closePromises);
+        this.activePages.clear();
+        
+        // Clear interval
+        if (this.pageCleanupInterval) {
+            clearInterval(this.pageCleanupInterval);
+            this.pageCleanupInterval = null;
+        }
+        
+        // Close browser context
+        if (this.context) {
+            await this.context.close().catch(() => {});
+            this.context = null;
+        }
+        
+        // Close browser
+        if (this.browser) {
+            await this.browser.close().catch(() => {});
+            this.browser = null;
+        }
+        
+        this.isConnected = false;
+        console.log('✅ Resource cleanup completed');
+    }
+    
+    getStats() {
+        const totalScrapes = this.successCount + this.errorCount;
+        const successRate = totalScrapes > 0 ? 
+            Math.round((this.successCount / totalScrapes) * 100) : 0;
+        
+        return {
+            status: this.isConnected ? 'connected' : 'disconnected',
+            successCount: this.successCount,
+            errorCount: this.errorCount,
+            successRate: `${successRate}%`,
+            activePages: this.activePages.size,
+            historySize: this.scrapeHistory.length,
+            lastRequestTime: this.lastRequestTime ? new Date(this.lastRequestTime).toISOString() : null,
+            memory: {
+                rss: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
+                heap: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB'
+            }
+        };
     }
 }
 
-// ==================== VPS OPTIMIZED SERVER ====================
+// ==================== EXPRESS API SERVER ====================
 const app = express();
 app.use(express.json());
 
-// CORS for VPS
+// Initialize scraper
+const scraper = new VpsTwitterScraper();
+
+// Middleware
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
-    res.setHeader('X-Powered-By', 'Twitter-Scraper-VPS');
     
     if (req.method === 'OPTIONS') {
         return res.status(200).end();
     }
+    
+    console.log(`📥 ${req.method} ${req.path} from ${req.ip}`);
     next();
 });
 
-// API Key middleware
-const API_KEY = process.env.API_KEY || 'Willyjodgreat';
+// Simple API key check (optional)
+const API_KEY = process.env.API_KEY;
 app.use((req, res, next) => {
     if (req.path === '/health' || req.path === '/') {
         return next();
     }
     
-    const apiKey = req.headers['x-api-key'] || req.query.api_key;
-    if (!apiKey || apiKey !== API_KEY) {
-        return res.status(401).json({
-            error: 'Invalid API key',
-            hint: `Use: x-api-key: ${API_KEY.substring(0, 3)}...`
-        });
+    if (API_KEY) {
+        const apiKey = req.headers['x-api-key'] || req.query.api_key;
+        if (!apiKey || apiKey !== API_KEY) {
+            return res.status(401).json({ error: 'Invalid API key' });
+        }
     }
     next();
 });
 
-// Initialize scraper
-const scraper = new VpsScraper();
-
 // Routes
 app.get('/', (req, res) => {
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Twitter Scraper VPS v5.0</title>
-            <style>
-                body { font-family: Arial, sans-serif; padding: 20px; }
-                .status { padding: 10px; border-radius: 5px; }
-                .connected { background: #4CAF50; color: white; }
-                .disconnected { background: #f44336; color: white; }
-            </style>
-        </head>
-        <body>
-            <h1>🐦 Twitter Scraper VPS v5.0</h1>
-            <div class="status ${scraper.isConnected ? 'connected' : 'disconnected'}">
-                Status: ${scraper.isConnected ? '✅ CONNECTED' : '❌ DISCONNECTED'}
-            </div>
-            <p><strong>Server:</strong> ${HOST}:${PORT}</p>
-            <p><strong>API Key:</strong> ${API_KEY.substring(0, 3)}...</p>
-            <p><strong>Endpoints:</strong></p>
-            <ul>
-                <li><code>POST /scrape</code> - Scrape tweets</li>
-                <li><code>GET /health</code> - Health check</li>
-            </ul>
-        </body>
-        </html>
-    `);
-});
-
-app.get('/health', (req, res) => {
+    const stats = scraper.getStats();
     res.json({
-        status: 'ok',
-        timestamp: new Date().toISOString(),
-        scraper: {
-            connected: scraper.isConnected,
-            host: HOST,
-            port: PORT
-        },
-        vps: {
-            hostname: os.hostname(),
-            platform: os.platform(),
-            memory: `${Math.round(os.freemem() / 1024 / 1024)}MB free / ${Math.round(os.totalmem() / 1024 / 1024)}MB total`,
-            cpus: os.cpus().length
+        name: 'VPS Twitter Scraper v6.0',
+        status: 'running',
+        stats,
+        endpoints: {
+            '/health': 'System health',
+            '/stats': 'Scraper statistics',
+            '/scrape/profile/:username': 'Scrape user profile',
+            '/scrape/search': 'POST {keyword, limit}'
         }
     });
 });
 
-app.post('/scrape', async (req, res) => {
-    const startTime = Date.now();
-    
-    try {
-        const { keyword, limit = 5 } = req.body;
-        
-        if (!keyword || typeof keyword !== 'string') {
-            return res.status(400).json({ error: 'Keyword required' });
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        scraper: scraper.getStats(),
+        system: {
+            hostname: os.hostname(),
+            platform: os.platform(),
+            memory: `${Math.round(os.freemem() / 1024 / 1024)}MB free`,
+            uptime: process.uptime()
         }
-        
-        const validLimit = Math.min(Math.max(parseInt(limit) || 5, 1), 20);
-        const trimmedKeyword = keyword.trim().substring(0, 100);
-        
-        console.log(`📥 Request: "${trimmedKeyword}" from ${req.ip}`);
-        
-        const tweets = await scraper.scrape(trimmedKeyword, validLimit);
-        
-        res.json({
-            success: true,
-            keyword: trimmedKeyword,
-            count: tweets.length,
-            processingTime: Date.now() - startTime,
-            tweets: tweets
-        });
-        
+    });
+});
+
+app.get('/stats', (req, res) => {
+    res.json(scraper.getStats());
+});
+
+app.get('/scrape/profile/:username', async (req, res) => {
+    try {
+        const { username } = req.params;
+        const profile = await scraper.scrapeProfile(username);
+        res.json({ success: true, profile });
     } catch (error) {
-        console.error('API Error:', error.message);
-        res.status(500).json({
-            error: error.message,
-            suggestion: 'Check if scraper is connected and Twitter session is valid'
-        });
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
-// ==================== VPS SERVER STARTUP ====================
-async function startVpsServer() {
+app.post('/scrape/search', async (req, res) => {
+    try {
+        const { keyword, limit = 10 } = req.body;
+        
+        if (!keyword || typeof keyword !== 'string') {
+            return res.status(400).json({ error: 'Keyword is required' });
+        }
+        
+        const validLimit = Math.min(Math.max(parseInt(limit) || 10, 1), 50);
+        const tweets = await scraper.scrapeTweets(keyword, validLimit);
+        
+        res.json({
+            success: true,
+            keyword,
+            count: tweets.length,
+            tweets
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ==================== SERVER STARTUP ====================
+async function startServer() {
     try {
         console.log(`
 ╔══════════════════════════════════════════════════╗
-║      TWITTER SCRAPER VPS v5.0                   ║
-║        Listening on ${HOST}:${PORT}                ║
+║      VPS TWITTER SCRAPER v6.0                  ║
+║      Listening on ${HOST}:${PORT}                ║
 ╚══════════════════════════════════════════════════╝`);
         
         // Connect scraper
         await scraper.connect();
         
-        // Create server
-        let server;
-        if (sslEnabled && sslKeyPath && sslCertPath && fs.existsSync(sslKeyPath) && fs.existsSync(sslCertPath)) {
-            const sslOptions = {
-                key: fs.readFileSync(sslKeyPath),
-                cert: fs.readFileSync(sslCertPath)
-            };
-            server = https.createServer(sslOptions, app);
-            console.log('🔒 HTTPS enabled');
-        } else {
-            server = http.createServer(app);
-            console.log('🌐 HTTP mode');
-        }
-        
-        // Listen on ALL interfaces (0.0.0.0)
-        server.listen(PORT, HOST, () => {
-            const protocol = sslEnabled ? 'https' : 'http';
+        // Start server
+        const server = app.listen(PORT, HOST, () => {
             console.log(`
-✅ VPS SERVER RUNNING
-   URL: ${protocol}://${HOST}:${PORT}
-   External: ${protocol}://${getPublicIp()}:${PORT}
+✅ SERVER STARTED
+   URL: http://${HOST}:${PORT}
    
-📋 QUICK TEST:
-   curl -H "x-api-key: ${API_KEY}" \\
-        -X POST \\
-        -H "Content-Type: application/json" \\
-        -d '{"keyword":"bitcoin","limit":3}' \\
-        ${protocol}://${getPublicIp()}:${PORT}/scrape
+📋 ENDPOINTS
+   GET  /                     - API documentation
+   GET  /health               - System health check
+   GET  /stats                - Scraper statistics
+   GET  /scrape/profile/:user - Scrape user profile
+   POST /scrape/search        - Search tweets
    
-🛡️  FIREWALL:
-   Allow port ${PORT} in your VPS firewall
-   Command: sudo ufw allow ${PORT}/tcp
+⚡ VPS OPTIMIZED
+   • Headless browser with anti-detection
+   • Memory management with cleanup
+   • Rate limiting built-in
+   • Modern X.com selectors
+   
+💡 QUICK TEST
+   curl http://${HOST}:${PORT}/scrape/profile/elonmusk
             `);
-        });
-        
-        // Handle errors
-        server.on('error', (error) => {
-            if (error.code === 'EADDRINUSE') {
-                console.error(`❌ Port ${PORT} already in use!`);
-                console.log('Kill process: sudo fuser -k ${PORT}/tcp');
-                process.exit(1);
-            }
-            console.error('Server error:', error);
         });
         
         // Graceful shutdown
         process.on('SIGINT', async () => {
-            console.log('\n🛑 Shutting down VPS scraper...');
-            await scraper.cleanup();
-            process.exit(0);
+            console.log('\n🛑 Shutting down gracefully...');
+            await scraper.cleanupResources();
+            server.close(() => {
+                console.log('✅ Server stopped');
+                process.exit(0);
+            });
         });
         
         process.on('SIGTERM', async () => {
-            console.log('\n🔚 Terminating VPS scraper...');
-            await scraper.cleanup();
-            process.exit(0);
+            console.log('\n🔚 Termination signal received...');
+            await scraper.cleanupResources();
+            server.close(() => {
+                process.exit(0);
+            });
         });
         
     } catch (error) {
-        console.error('❌ VPS startup failed:', error);
+        console.error('❌ Startup failed:', error);
         process.exit(1);
     }
 }
 
-function getPublicIp() {
-    try {
-        const interfaces = os.networkInterfaces();
-        for (const name of Object.keys(interfaces)) {
-            for (const iface of interfaces[name]) {
-                if (iface.family === 'IPv4' && !iface.internal) {
-                    return iface.address;
-                }
-            }
-        }
-        return 'localhost';
-    } catch {
-        return 'localhost';
-    }
+// ==================== DEPLOYMENT SCRIPT ====================
+/*
+// package.json dependencies:
+{
+  "name": "twitter-vps-scraper",
+  "version": "6.0.0",
+  "dependencies": {
+    "express": "^4.18.0",
+    "playwright": "^1.40.0",
+    "dotenv": "^16.0.0"
+  },
+  "scripts": {
+    "start": "node twitter_vps_scraper.js",
+    "setup": "npx playwright install chromium",
+    "get-session": "node get_session.js"
+  }
 }
 
-// Start VPS server
-startVpsServer();
+// get_session.js (optional - for authenticated scraping):
+const { chromium } = require('playwright');
+const fs = require('fs');
 
-module.exports = { VpsScraper };
+async function getSession() {
+    const browser = await chromium.launch({ headless: false });
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    
+    await page.goto('https://x.com/login');
+    console.log('⚠️  Please log in manually in the browser window...');
+    
+    // Wait for login to complete
+    await page.waitForURL('https://x.com/home', { timeout: 120000 });
+    
+    const cookies = await context.cookies();
+    fs.writeFileSync('twitter_session.json', JSON.stringify({ cookies }, null, 2));
+    
+    console.log(`✅ Saved ${cookies.length} cookies to twitter_session.json`);
+    await browser.close();
+}
 
+getSession().catch(console.error);
+*/
+
+// Start the server
+startServer();
+
+module.exports = { VpsTwitterScraper };
