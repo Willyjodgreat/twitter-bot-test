@@ -1,4 +1,4 @@
-// twitter_pro_scraper.js - ENHANCED VERSION WITH SSL & PROXIES
+// twitter_graphql_scraper.js - UPDATED FOR 2026 X.COM
 const { chromium } = require('playwright');
 const express = require('express');
 const fs = require('fs');
@@ -7,227 +7,258 @@ const https = require('https');
 const http = require('http');
 require('dotenv').config();
 
-class TwitterProScraper {
+class TwitterGraphQLScraper {
     constructor() {
         this.browser = null;
         this.context = null;
         this.isConnected = false;
         this.sessionFile = 'twitter_session.json';
-        
-        // Config
-        this.port = process.env.PORT || 3005;
-        this.useSSL = process.env.SSL_ENABLED === 'true';
-        this.sslKeyPath = process.env.SSL_KEY_PATH;
-        this.sslCertPath = process.env.SSL_CERT_PATH;
-        this.proxyServer = process.env.PROXY_SERVER; // http://user:pass@ip:port
-        
-        console.log(`🔧 Config: SSL=${this.useSSL}, Proxy=${this.proxyServer ? 'Yes' : 'No'}`);
+        this.port = process.env.PORT || 3003;
+        this.apiKey = process.env.API_KEY || 'Willyjodgreat';
     }
     
     async connect() {
         try {
-            console.log('🚀 Starting enhanced scraper...');
+            console.log('🚀 Starting GraphQL scraper...');
             
-            // Check cookies
-            if (!fs.existsSync(this.sessionFile)) {
-                console.log('⚠️  No session file. Will try public access.');
-            }
-            
-            // Browser args with proxy if configured
+            // Browser setup
             const browserArgs = [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--window-size=1280,720',
-                '--disable-blink-features=AutomationControlled',
-                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                '--disable-blink-features=AutomationControlled'
             ];
             
-            // Add proxy if configured
-            if (this.proxyServer) {
-                browserArgs.push(`--proxy-server=${this.proxyServer}`);
-                console.log(`🌐 Using proxy: ${this.proxyServer.split('@')[1] || this.proxyServer}`);
-            }
-            
-            // Launch browser
             this.browser = await chromium.launch({ 
                 headless: true,
                 args: browserArgs
             });
             
-            // Browser context
             this.context = await this.browser.newContext({
                 viewport: { width: 1280, height: 720 },
                 userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                ignoreHTTPSErrors: false
+                ignoreHTTPSErrors: true
             });
             
-            // Load cookies if they exist
+            // Load cookies
             if (fs.existsSync(this.sessionFile)) {
                 try {
                     const session = JSON.parse(fs.readFileSync(this.sessionFile, 'utf8'));
-                    // Fix cookie domains from x.com to twitter.com
-                    session.cookies = session.cookies.map(cookie => ({
-                        ...cookie,
-                        domain: cookie.domain?.includes('x.com') ? '.twitter.com' : cookie.domain
-                    }));
-                    await this.context.addCookies(session.cookies);
-                    console.log(`✅ Loaded ${session.cookies.length} cookies`);
+                    await this.context.addCookies(session.cookies || []);
+                    console.log(`✅ Loaded ${(session.cookies || []).length} cookies`);
                 } catch (e) {
-                    console.log('⚠️  Could not load cookies:', e.message);
+                    console.log('⚠️ Cookie error:', e.message);
                 }
             }
             
-            // Test connection
-            await this.testConnection();
+            // Quick test
+            const page = await this.context.newPage();
+            await page.goto('https://x.com', { waitUntil: 'domcontentloaded', timeout: 15000 });
+            await page.waitForTimeout(2000);
+            await page.close();
             
             this.isConnected = true;
-            console.log('✅ Connected successfully!');
+            console.log('✅ Connected!');
             return true;
             
         } catch (error) {
             console.error('❌ Connection failed:', error.message);
-            await this.cleanup();
-            throw error;
-        }
-    }
-    
-    async testConnection() {
-        const page = await this.context.newPage();
-        try {
-            await page.goto('https://twitter.com/explore', {
-                waitUntil: 'domcontentloaded',
-                timeout: 30000
-            });
-            
-            await page.waitForTimeout(3000);
-            
-            // Check for tweets or login
-            const hasContent = await page.evaluate(() => {
-                return document.querySelectorAll('article').length > 0 ||
-                       document.querySelector('a[href*="compose/tweet"]') !== null;
-            });
-            
-            if (!hasContent) {
-                console.log('⚠️  Limited access - may need fresh cookies');
-            }
-            
-            await page.close();
-            return hasContent;
-            
-        } catch (error) {
-            await page.close();
+            if (this.browser) await this.browser.close();
             throw error;
         }
     }
     
     async scrapeTweets(keyword, limit = 10) {
-        if (!this.isConnected) {
-            throw new Error('Not connected');
-        }
+        if (!this.isConnected) throw new Error('Not connected');
         
-        console.log(`🔍 Searching: "${keyword}"`);
+        console.log(`🔍 Searching: "${keyword}" (limit: ${limit})`);
         
         const page = await this.context.newPage();
+        const tweets = [];
         
         try {
-            // Try multiple search URLs
-            const searchUrls = [
-                `https://twitter.com/search?q=${encodeURIComponent(keyword)}&src=typed_query`,
-                `https://twitter.com/search?q=${encodeURIComponent(keyword)}&f=live`,
-                `https://x.com/search?q=${encodeURIComponent(keyword)}`
-            ];
-            
-            let success = false;
-            
-            for (const url of searchUrls) {
+            // Listen for GraphQL responses
+            page.on('response', async (response) => {
                 try {
-                    console.log(`🌐 Trying: ${url}`);
-                    await page.goto(url, {
-                        waitUntil: 'domcontentloaded',
-                        timeout: 30000
-                    });
-                    
-                    await page.waitForTimeout(5000);
-                    
-                    // Check if page loaded
-                    const hasResults = await page.evaluate(() => {
-                        return document.querySelectorAll('article').length > 0 ||
-                               document.querySelector('main') !== null;
-                    });
-                    
-                    if (hasResults) {
-                        success = true;
-                        console.log('✅ Search loaded');
-                        break;
+                    const url = response.url();
+                    if (url.includes('/graphql/') && (url.includes('SearchTimeline') || url.includes('Search'))) {
+                        const data = await response.json();
+                        
+                        // Extract tweets from GraphQL response
+                        const extracted = this.extractTweetsFromGraphQL(data, keyword);
+                        extracted.forEach(tweet => {
+                            if (!tweets.some(t => t.id === tweet.id) && tweets.length < limit) {
+                                tweets.push(tweet);
+                            }
+                        });
+                        
+                        console.log(`📥 GraphQL: Found ${extracted.length} tweets, total: ${tweets.length}`);
                     }
                 } catch (e) {
-                    console.log(`   Failed: ${e.message}`);
+                    // Silent fail for non-JSON responses
+                }
+            });
+            
+            // Go to search page
+            const searchUrl = `https://x.com/search?q=${encodeURIComponent(keyword)}&src=typed_query`;
+            console.log(`🌐 Loading: ${searchUrl}`);
+            
+            await page.goto(searchUrl, {
+                waitUntil: 'networkidle',
+                timeout: 30000
+            });
+            
+            // Wait for GraphQL calls
+            await page.waitForTimeout(5000);
+            
+            // Scroll to trigger more API calls
+            for (let i = 0; i < 3 && tweets.length < limit; i++) {
+                await page.evaluate(() => window.scrollBy(0, 1000));
+                await page.waitForTimeout(3000);
+                
+                if (tweets.length >= limit) break;
+            }
+            
+            await page.close();
+            
+            console.log(`✅ Total tweets found: ${tweets.length}`);
+            return tweets.slice(0, limit);
+            
+        } catch (error) {
+            await page.close();
+            console.error(`❌ Scrape failed: ${error.message}`);
+            
+            // Fallback to HTML scraping if GraphQL fails
+            console.log('🔄 Trying HTML fallback...');
+            return this.fallbackHTMLScrape(keyword, limit);
+        }
+    }
+    
+    extractTweetsFromGraphQL(data, keyword) {
+        const tweets = [];
+        
+        try {
+            // Try different GraphQL response structures
+            const paths = [
+                data?.data?.search_by_raw_query?.search_timeline?.timeline?.instructions,
+                data?.data?.search?.search_timeline?.timeline_response?.instructions,
+                data?.data?.searchTimeline?.timeline?.instructions,
+                data?.data?.searchTimeline?.instructions
+            ];
+            
+            for (const instructions of paths) {
+                if (instructions && Array.isArray(instructions)) {
+                    instructions.forEach(instruction => {
+                        if (instruction.type === 'TimelineAddEntries') {
+                            instruction.entries?.forEach(entry => {
+                                if (entry.content?.itemContent?.tweet_results?.result) {
+                                    const tweetData = entry.content.itemContent.tweet_results.result;
+                                    this.processTweetData(tweetData, tweets, keyword);
+                                }
+                                
+                                // Check for timeline modules
+                                if (entry.content?.items) {
+                                    entry.content.items.forEach(item => {
+                                        if (item.item?.itemContent?.tweet_results?.result) {
+                                            const tweetData = item.item.itemContent.tweet_results.result;
+                                            this.processTweetData(tweetData, tweets, keyword);
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                    });
                 }
             }
+        } catch (e) {
+            console.log('⚠️ GraphQL parsing error:', e.message);
+        }
+        
+        return tweets;
+    }
+    
+    processTweetData(tweetData, tweets, keyword) {
+        try {
+            const legacy = tweetData.legacy || tweetData.core?.user_results?.result?.legacy || tweetData;
             
-            if (!success) {
-                throw new Error('Could not load search results');
-            }
+            if (!legacy?.full_text) return;
             
-            // Scroll and collect
-            const allTweets = [];
+            const author = tweetData.core?.user_results?.result?.legacy?.screen_name || 
+                          tweetData.core?.user_results?.result?.legacy?.name || 
+                          'Unknown';
             
+            tweets.push({
+                id: tweetData.rest_id || `tweet_${Date.now()}`,
+                text: legacy.full_text,
+                author: author,
+                keyword: keyword,
+                length: legacy.full_text.length,
+                scrapedAt: new Date().toISOString(),
+                likes: legacy.favorite_count || 0,
+                retweets: legacy.retweet_count || 0,
+                replies: legacy.reply_count || 0
+            });
+        } catch (e) {
+            // Skip bad data
+        }
+    }
+    
+    async fallbackHTMLScrape(keyword, limit) {
+        const page = await this.context.newPage();
+        const allTweets = [];
+        
+        try {
+            await page.goto(`https://mobile.twitter.com/search?q=${encodeURIComponent(keyword)}`, {
+                waitUntil: 'networkidle',
+                timeout: 20000
+            });
+            
+            await page.waitForTimeout(3000);
+            
+            // Simple HTML scraping as fallback
             for (let i = 0; i < 3 && allTweets.length < limit; i++) {
-                const newTweets = await page.evaluate((kw) => {
-                    const articles = document.querySelectorAll('article');
+                const tweets = await page.evaluate((kw) => {
+                    const elements = document.querySelectorAll('article, [data-testid="tweet"], [role="article"]');
                     const results = [];
                     
-                    articles.forEach((article, idx) => {
-                        try {
-                            const text = article.textContent || '';
-                            if (text.length < 30) return;
-                            
-                            const authorEl = article.querySelector('[data-testid="User-Name"]');
-                            const author = authorEl ? authorEl.textContent.split('·')[0].trim() : 'Unknown';
-                            
+                    elements.forEach((el, idx) => {
+                        const text = el.innerText || '';
+                        if (text.length > 50) {
                             results.push({
-                                id: `tweet_${Date.now()}_${idx}`,
-                                text: text.substring(0, 250),
-                                author: author.substring(0, 50),
+                                id: `html_${Date.now()}_${idx}`,
+                                text: text.substring(0, 300),
+                                author: text.split('\n')[0] || 'Unknown',
                                 keyword: kw,
                                 length: text.length,
                                 scrapedAt: new Date().toISOString()
                             });
-                        } catch (e) {}
+                        }
                     });
                     
                     return results;
                 }, keyword);
                 
-                // Filter unique
-                newTweets.forEach(tweet => {
+                tweets.forEach(tweet => {
                     if (!allTweets.some(t => t.text.substring(0, 50) === tweet.text.substring(0, 50))) {
                         allTweets.push(tweet);
                     }
                 });
                 
-                console.log(`   Scroll ${i + 1}: ${newTweets.length} new, ${allTweets.length} total`);
-                
-                // Scroll for more
                 if (allTweets.length < limit) {
-                    await page.evaluate(() => {
-                        window.scrollBy(0, window.innerHeight * 2);
-                    });
-                    await page.waitForTimeout(3000);
+                    await page.evaluate(() => window.scrollBy(0, 1000));
+                    await page.waitForTimeout(2000);
                 }
             }
             
             await page.close();
-            
-            const result = allTweets.slice(0, limit);
-            console.log(`✅ Found ${result.length} tweets for "${keyword}"`);
-            return result;
+            console.log(`🔄 HTML fallback found: ${allTweets.length} tweets`);
+            return allTweets.slice(0, limit);
             
         } catch (error) {
             await page.close();
-            console.error(`❌ Scrape failed: ${error.message}`);
-            throw error;
+            console.error('HTML fallback failed:', error.message);
+            return [];
         }
     }
     
@@ -236,206 +267,80 @@ class TwitterProScraper {
             if (this.context) await this.context.close();
             if (this.browser) await this.browser.close();
             this.isConnected = false;
-            console.log('🧹 Cleanup complete');
-        } catch (error) {
+        } catch (e) {
             // Ignore
         }
     }
 }
 
-// ==================== ENHANCED EXPRESS SERVER ====================
+// Express server - SIMPLE VERSION
 const app = express();
 app.use(express.json());
-app.use(express.static('public'));
 
-// Security headers
+// API key check
 app.use((req, res, next) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('X-XSS-Protection', '1; mode=block');
+    if (req.path === '/' || req.path === '/health') return next();
     
-    if (process.env.NODE_ENV === 'production') {
-        res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
-    }
-    
-    res.setHeader('Access-Control-Allow-Origin', process.env.ALLOWED_ORIGINS || '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-api-key');
-    
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
+    const key = req.headers['x-api-key'] || req.query.api_key;
+    if (!key || key !== (process.env.API_KEY || 'Willyjodgreat')) {
+        return res.status(401).json({ error: 'Bad API key' });
     }
     
     next();
 });
 
-// API key middleware
-const apiKeyMiddleware = (req, res, next) => {
-    if (req.path === '/' || req.path === '/health' || req.path.startsWith('/public/')) {
-        return next();
-    }
-    
-    const apiKey = req.headers['x-api-key'] || req.query.api_key;
-    const validKey = process.env.API_KEY || 'Willyjodgreat';
-    
-    if (!apiKey || apiKey !== validKey) {
-        return res.status(401).json({
-            success: false,
-            error: 'Invalid API key',
-            hint: `Use: x-api-key: ${validKey.substring(0, 3)}...`
-        });
-    }
-    
-    next();
-};
+const scraper = new TwitterGraphQLScraper();
 
-app.use(apiKeyMiddleware);
-
-// Create scraper instance
-const scraper = new TwitterProScraper();
-
-// ==================== ROUTES ====================
+// Routes
 app.get('/', (req, res) => {
     res.send(`
-        <!DOCTYPE html>
         <html>
-        <head>
-            <title>Twitter Pro Scraper</title>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <style>
-                * { margin: 0; padding: 0; box-sizing: border-box; }
-                body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
-                       background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; 
-                       min-height: 100vh; padding: 20px; }
-                .container { max-width: 1200px; margin: 0 auto; }
-                .header { text-align: center; margin-bottom: 30px; padding: 20px; }
-                .card { background: rgba(255,255,255,0.1); backdrop-filter: blur(10px); 
-                        border-radius: 15px; padding: 25px; margin-bottom: 20px; 
-                        border: 1px solid rgba(255,255,255,0.2); }
-                .status { display: inline-flex; align-items: center; padding: 8px 16px; 
-                         border-radius: 20px; font-weight: 600; margin: 10px 0; }
-                .connected { background: #10B981; }
-                .disconnected { background: #EF4444; }
-                input, select, button { padding: 12px 16px; border: none; border-radius: 8px; 
-                                       font-size: 16px; margin: 5px; width: 100%; }
-                button { background: #3B82F6; color: white; cursor: pointer; 
-                         transition: background 0.3s; font-weight: 600; }
-                button:hover { background: #2563EB; }
-                .tweet { background: rgba(255,255,255,0.15); border-radius: 10px; 
-                         padding: 15px; margin: 10px 0; border-left: 4px solid #1DA1F2; }
-                .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-                @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
-            </style>
-        </head>
+        <head><title>X Scraper</title><style>
+            body{font-family:sans-serif;padding:20px;background:#15202b;color:white}
+            .card{background:#1e2732;padding:20px;border-radius:10px;margin:20px 0}
+            input,button{padding:10px;margin:5px;border-radius:5px;border:none}
+            button{background:#1da1f2;color:white;cursor:pointer}
+        </style></head>
         <body>
-            <div class="container">
-                <div class="header">
-                    <h1>🐦 Twitter Pro Scraper</h1>
-                    <p>Advanced scraping with SSL, Proxies & GUI</p>
-                    <div class="status ${scraper.isConnected ? 'connected' : 'disconnected'}">
-                        ${scraper.isConnected ? '✅ CONNECTED' : '❌ DISCONNECTED'}
-                        <span style="margin-left: 10px; font-size: 12px; opacity: 0.8;">
-                            ${scraper.useSSL ? '🔒 SSL' : '🌐 HTTP'} 
-                            ${scraper.proxyServer ? '• 🌐 Proxy' : ''}
-                        </span>
-                    </div>
-                </div>
-                
-                <div class="grid">
-                    <div class="card">
-                        <h3>🔍 Scrape Tweets</h3>
-                        <input type="text" id="keyword" placeholder="Enter keyword..." value="technology">
-                        <select id="limit">
-                            <option value="3">3 tweets</option>
-                            <option value="5" selected>5 tweets</option>
-                            <option value="10">10 tweets</option>
-                        </select>
-                        <button onclick="scrape()">Scrape Now</button>
-                        <div id="result" style="margin-top: 15px;"></div>
-                    </div>
-                    
-                    <div class="card">
-                        <h3>📊 System Info</h3>
-                        <p><strong>Port:</strong> ${scraper.port}</p>
-                        <p><strong>SSL:</strong> ${scraper.useSSL ? 'Enabled 🔒' : 'Disabled'}</p>
-                        <p><strong>Proxy:</strong> ${scraper.proxyServer ? 'Configured' : 'Not configured'}</p>
-                        <p><strong>Mode:</strong> ${process.env.NODE_ENV || 'development'}</p>
-                        <button onclick="location.href='/health'" style="background: #6B7280; margin-top: 10px;">
-                            Health Check
-                        </button>
-                    </div>
-                </div>
-                
-                <div id="tweetsContainer" class="card" style="display: none;">
-                    <h3>📝 Results</h3>
-                    <div id="tweetsList"></div>
-                </div>
+            <h1>🐦 X GraphQL Scraper</h1>
+            <div class="card">
+                <h3>🔍 Scrape Tweets</h3>
+                <input id="keyword" placeholder="Keyword" value="technology">
+                <input id="limit" type="number" value="5" min="1" max="20">
+                <button onclick="scrape()">Scrape</button>
+                <div id="result" style="margin-top:15px"></div>
             </div>
-            
             <script>
                 async function scrape() {
-                    const keyword = document.getElementById('keyword').value.trim();
+                    const kw = document.getElementById('keyword').value;
                     const limit = document.getElementById('limit').value;
-                    const resultDiv = document.getElementById('result');
-                    
-                    if (!keyword) {
-                        resultDiv.innerHTML = '<p style="color: #FCA5A5;">Please enter a keyword</p>';
-                        return;
-                    }
-                    
-                    resultDiv.innerHTML = '<p>⏳ Scraping... This may take 10-20 seconds.</p>';
+                    const result = document.getElementById('result');
+                    result.innerHTML = '⏳ Scraping...';
                     
                     try {
-                        const response = await fetch('/scrape', {
+                        const res = await fetch('/scrape', {
                             method: 'POST',
-                            headers: { 
-                                'Content-Type': 'application/json',
-                                'x-api-key': '${process.env.API_KEY || 'Willyjodgreat'}'
-                            },
-                            body: JSON.stringify({ keyword, limit: parseInt(limit) })
+                            headers: { 'Content-Type': 'application/json', 'x-api-key': '${scraper.apiKey}' },
+                            body: JSON.stringify({ keyword: kw, limit: parseInt(limit) })
                         });
-                        
-                        const data = await response.json();
+                        const data = await res.json();
                         
                         if (data.success) {
-                            let html = '<div style="background: rgba(16, 185, 129, 0.2); padding: 15px; border-radius: 10px;">';
-                            html += '<h4 style="color: #10B981;">✅ Success!</h4>';
-                            html += '<p><strong>Keyword:</strong> ' + data.keyword + '</p>';
-                            html += '<p><strong>Tweets Found:</strong> ' + data.count + '</p>';
-                            
-                            if (data.tweets.length > 0) {
-                                document.getElementById('tweetsContainer').style.display = 'block';
-                                const tweetsList = document.getElementById('tweetsList');
-                                tweetsList.innerHTML = '';
-                                
-                                data.tweets.forEach(tweet => {
-                                    const tweetDiv = document.createElement('div');
-                                    tweetDiv.className = 'tweet';
-                                    tweetDiv.innerHTML = \`
-                                        <p>\${tweet.text.substring(0, 150)}\${tweet.text.length > 150 ? '...' : ''}</p>
-                                        <small style="color: #D1D5DB;">👤 \${tweet.author} • 📏 \${tweet.length} chars</small>
-                                    \`;
-                                    tweetsList.appendChild(tweetDiv);
-                                });
-                            }
-                            
-                            html += '</div>';
-                            resultDiv.innerHTML = html;
+                            let html = '<h4>✅ ' + data.count + ' tweets found</h4>';
+                            data.tweets.forEach(t => {
+                                html += '<div style="background:#273340;padding:10px;margin:5px;border-radius:5px">';
+                                html += '<p>' + t.text.substring(0,150) + '...</p>';
+                                html += '<small>👤 ' + t.author + ' | 📏 ' + t.length + ' chars</small>';
+                                html += '</div>';
+                            });
+                            result.innerHTML = html;
                         } else {
-                            resultDiv.innerHTML = '<div style="background: rgba(239, 68, 68, 0.2); padding: 15px; border-radius: 10px;">' +
-                                '<h4 style="color: #EF4444;">❌ Error</h4><p>' + data.error + '</p></div>';
+                            result.innerHTML = '❌ Error: ' + data.error;
                         }
-                    } catch (error) {
-                        resultDiv.innerHTML = '<div style="background: rgba(239, 68, 68, 0.2); padding: 15px; border-radius: 10px;">' +
-                            '<h4 style="color: #EF4444;">❌ Request Failed</h4><p>' + error.message + '</p></div>';
+                    } catch(e) {
+                        result.innerHTML = '❌ Request failed: ' + e.message;
                     }
                 }
-                
-                // Enter key to scrape
-                document.getElementById('keyword').addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter') scrape();
-                });
             </script>
         </body>
         </html>
@@ -444,148 +349,66 @@ app.get('/', (req, res) => {
 
 app.get('/health', (req, res) => {
     res.json({
-        status: scraper.isConnected ? 'healthy' : 'disconnected',
+        status: scraper.isConnected ? 'connected' : 'disconnected',
         timestamp: new Date().toISOString(),
-        scraper: {
-            connected: scraper.isConnected,
-            ssl: scraper.useSSL,
-            proxy: !!scraper.proxyServer,
-            port: scraper.port
-        },
-        system: {
-            node: process.version,
-            platform: process.platform,
-            memory: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`
-        }
+        port: scraper.port
     });
 });
 
 app.post('/scrape', async (req, res) => {
-    const startTime = Date.now();
-    
     try {
         const { keyword, limit = 5 } = req.body;
+        if (!keyword) return res.status(400).json({ error: 'Keyword required' });
         
-        if (!keyword || typeof keyword !== 'string' || keyword.trim().length === 0) {
-            return res.status(400).json({ 
-                success: false, 
-                error: 'Valid keyword required' 
-            });
-        }
-        
-        const tweetLimit = Math.min(parseInt(limit) || 5, 20);
-        const trimmedKeyword = keyword.trim().substring(0, 100);
-        
-        console.log(`📥 API Request: "${trimmedKeyword}" (limit: ${tweetLimit})`);
-        
-        const tweets = await scraper.scrapeTweets(trimmedKeyword, tweetLimit);
+        const tweets = await scraper.scrapeTweets(keyword.trim(), Math.min(limit, 20));
         
         res.json({
             success: true,
-            keyword: trimmedKeyword,
+            keyword: keyword,
             count: tweets.length,
-            processingTime: Date.now() - startTime,
-            tweets: tweets.map(t => ({
-                id: t.id,
-                text: t.text,
-                author: t.author,
-                length: t.length,
-                keyword: t.keyword,
-                scrapedAt: t.scrapedAt
-            }))
+            tweets: tweets
         });
         
     } catch (error) {
-        console.error('API Error:', error.message);
         res.status(500).json({
             success: false,
-            error: error.message,
-            timestamp: new Date().toISOString()
+            error: error.message
         });
     }
 });
 
-// ==================== START SERVER WITH SSL ====================
-async function startServer() {
+// Start server
+async function start() {
     try {
-        console.log(`
-╔══════════════════════════════════════════════════════════╗
-║       TWITTER PRO SCRAPER v3.0 - ENHANCED EDITION       ║
-║         SSL • Proxies • GUI • Cookies • API             ║
-╚══════════════════════════════════════════════════════════╝`);
-        
-        // Connect scraper
         await scraper.connect();
         
-        let server;
-        
-        // SSL Configuration
-        if (scraper.useSSL && scraper.sslKeyPath && scraper.sslCertPath && 
-            fs.existsSync(scraper.sslKeyPath) && fs.existsSync(scraper.sslCertPath)) {
-            
-            const sslOptions = {
-                key: fs.readFileSync(scraper.sslKeyPath),
-                cert: fs.readFileSync(scraper.sslCertPath)
-            };
-            
-            server = https.createServer(sslOptions, app);
-            console.log('🔒 HTTPS server with SSL enabled');
-            
-        } else {
-            server = http.createServer(app);
-            console.log('🌐 HTTP server (SSL not configured)');
-            
-            if (process.env.NODE_ENV === 'production') {
-                console.warn('⚠️  WARNING: Running production without SSL!');
-            }
-        }
-        
-        // Listen on ALL interfaces (0.0.0.0) - FIXED
+        const server = http.createServer(app);
         server.listen(scraper.port, '0.0.0.0', () => {
-            const protocol = scraper.useSSL ? 'https' : 'http';
-            const localUrl = `${protocol}://localhost:${scraper.port}`;
-            
             console.log(`
-✅ SERVER STARTED
-   Port: ${scraper.port}
-   Host: 0.0.0.0 (All interfaces)
-   SSL: ${scraper.useSSL ? '✅ ENABLED' : '❌ DISABLED'}
-   Proxy: ${scraper.proxyServer ? '✅ CONFIGURED' : '❌ NOT CONFIGURED'}
-   
-🌐 ACCESS URLs
-   Local: ${localUrl}
-   Network: ${protocol}://$(curl -s ifconfig.me 2>/dev/null || echo 'YOUR_IP'):${scraper.port}
-   
-🔧 CONFIGURATION
-   • Add SSL: SSL_ENABLED=true, SSL_KEY_PATH, SSL_CERT_PATH
-   • Add Proxy: PROXY_SERVER=http://user:pass@ip:port
-   • API Key: API_KEY=your_key (default: Willyjodgreat)
-   
-📋 TEST COMMAND
-   curl -X POST ${localUrl}/scrape \\
-        -H "Content-Type: application/json" \\
-        -H "x-api-key: ${process.env.API_KEY || 'Willyjodgreat'}" \\
-        -d '{"keyword":"bitcoin","limit":3}'
+✅ SERVER READY
+Port: ${scraper.port}
+Local: http://localhost:${scraper.port}
+API Key: ${scraper.apiKey}
+
+Test with:
+curl -X POST http://localhost:${scraper.port}/scrape \\
+  -H "Content-Type: application/json" \\
+  -H "x-api-key: ${scraper.apiKey}" \\
+  -d '{"keyword":"test","limit":3}'
             `);
         });
         
-        // Graceful shutdown
+        // Clean shutdown
         process.on('SIGINT', async () => {
-            console.log('\n🛑 Shutting down gracefully...');
-            await scraper.cleanup();
-            process.exit(0);
-        });
-        
-        process.on('SIGTERM', async () => {
-            console.log('\n🔚 Terminating...');
+            console.log('\nShutting down...');
             await scraper.cleanup();
             process.exit(0);
         });
         
     } catch (error) {
-        console.error('❌ Startup failed:', error);
+        console.error('Startup failed:', error);
         process.exit(1);
     }
 }
 
-startServer();
+start();
